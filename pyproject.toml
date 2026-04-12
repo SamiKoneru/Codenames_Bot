@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codenames-llm-rl"
+version = "0.1.0"
+description = "Codenames self-play environment with LLM policy scaffolding and RL dataset export."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+train = [
+    "accelerate>=0.30",
+    "datasets>=2.19",
+    "peft>=0.11",
+    "torch>=2.2",
+    "transformers>=4.40",
+    "trl>=0.11",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+# Exclude data / archive dirs at repo root so editable install does not fail
+# with "Multiple top-level packages discovered" (setuptools flat-layout).
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["artifacts*", "scripts*", "tests*"]
