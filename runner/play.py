@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Optional, Union
+from typing import Dict, List, Mapping, Optional, Union
 
 from game.engine import TEAM_A, TEAM_B, SelfPlayCodenamesGame
 from bots.guesser.policy import GuesserObservation, GuesserPolicy
@@ -33,7 +33,11 @@ def _policy_for_team(policy_or_map, team: int):
     return policy_or_map
 
 
-def _build_spymaster_observation(game: SelfPlayCodenamesGame, turn_index: int) -> SpymasterObservation:
+def _build_spymaster_observation(
+    game: SelfPlayCodenamesGame,
+    turn_index: int,
+    past_clues: Optional[List[str]] = None,
+) -> SpymasterObservation:
     state = game.get_spymaster_state()
     return SpymasterObservation(
         team=game.active_team,
@@ -44,6 +48,7 @@ def _build_spymaster_observation(game: SelfPlayCodenamesGame, turn_index: int) -
         team_a_remaining=state["team_a_remaining"],
         team_b_remaining=state["team_b_remaining"],
         turn_index=turn_index,
+        past_clues=list(past_clues or []),
     )
 
 
@@ -116,10 +121,11 @@ def collect_self_play_episode(
 
     steps: List[TrajectoryStep] = []
     turn_index = 0
+    past_clues: List[str] = []
 
     while not game.game_over and turn_index < cfg.max_turns:
         spymaster = _policy_for_team(spymaster_policy, game.active_team)
-        spymaster_observation = _build_spymaster_observation(game, turn_index)
+        spymaster_observation = _build_spymaster_observation(game, turn_index, past_clues)
         clue_action = spymaster.choose_clue(spymaster_observation)
 
         clue_step = TrajectoryStep(
@@ -133,6 +139,21 @@ def collect_self_play_episode(
         )
         steps.append(clue_step)
 
+        # Illegal clue: forfeit the turn with a penalty, do not let the guesser
+        # act. This gives the policy a gradient away from illegal clues instead
+        # of treating the validator as a free safety net.
+        if clue_action.metadata.get("illegal_clue"):
+            penalty = float(game.reward.illegal_clue)
+            clue_step.environment_reward = penalty
+            clue_step.reward = penalty
+            clue_step.metadata["illegal_clue"] = True
+            clue_step.metadata["validation"] = clue_action.metadata.get("validation", {})
+            game.start_turn(1)
+            game.end_turn()
+            turn_index += 1
+            continue
+
+        past_clues.append(clue_action.clue_word)
         game.start_turn(max(1, clue_action.guess_limit))
         guesses_made: List[str] = []
         turn_reward = 0.0

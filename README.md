@@ -8,9 +8,11 @@ Two-team [Codenames](https://en.wikipedia.org/wiki/Codenames_(board_game)) self-
 - **Policies** (`bots/`): prompt builders, structured JSON actions, `LLM*` adapters and `Random*` baselines.
 - **LLM** (`llm/`): `TextGenerationBackend` protocol; **Hugging Face** implementation for local `generate` + training on the same weights.
 - **Rollouts** (`runner/`): self-play episodes → `TrajectoryStep` / `EpisodeRecord`, discounted returns, JSONL export.
+- **Clue validation** (`bots/spymaster/validation.py`): enforces legal Codenames clues (single alphabetic word, no substring overlap with board words, no repeats), with retry-and-feedback in the LLM spymaster and a forfeit penalty in the runner.
+- **Evaluation** (`runner/evaluate.py`): head-to-head matchups with side-swapping; reports win rate, guess accuracy, assassin rate, illegal-clue rate, and clue diversity.
 - **Training** (`training/`): **SFT** (filtered imitation on completions) and **GRPO** (advantage-weighted log-probs + KL vs a reference model), with token-level log-probs in `log_probs.py`.
-- **Scripts**: collect JSONL without a GPU, play a game in the terminal, run `train.py sft|grpo`.
-- **Tests** (`tests/`): engine, bots, runner, utils.
+- **Scripts**: collect JSONL without a GPU, play a game in the terminal, evaluate one bot against another, run `train.py sft|grpo`.
+- **Tests** (`tests/`): engine, bots, clue validation, runner, evaluation, utils.
 
 ## Requirements
 
@@ -59,6 +61,13 @@ python scripts/train.py grpo --model artifacts/sft --role guesser --steps 100 --
 
 Use `python scripts/train.py --help` and `sft` / `grpo` subcommands for full flags (`--word-file`, board sizes, KL coefficient, etc.).
 
+**Evaluate** a bot head-to-head (random vs random is a ~50/50 harness sanity check; point `--candidate-model` at a checkpoint to measure training):
+
+```bash
+python scripts/evaluate.py --games 100                          # sanity check
+python scripts/evaluate.py --candidate-model artifacts/grpo_ckpt --baseline-model gpt2 --games 100
+```
+
 ## Project layout
 
 | Path | Role |
@@ -69,10 +78,12 @@ Use `python scripts/train.py --help` and `sft` / `grpo` subcommands for full fla
 | `runner/play.py` | `collect_self_play_episode(s)`, outcome bonuses, discounted returns. |
 | `runner/trajectory.py` | `TrajectoryStep`, `EpisodeRecord`. |
 | `runner/export.py` | `episode_to_jsonl_records`, SFT-style records, `write_jsonl`. |
+| `runner/evaluate.py` | `evaluate_matchup`, `SideMetrics` — head-to-head win rate and diagnostics. |
+| `bots/spymaster/validation.py` | `validate_clue` — legal-clue enforcement. |
 | `training/sft.py` | Collect random rollouts → filter by `discounted_return` → CE on completions. |
 | `training/grpo.py` | Each step: `G` episodes → normalize returns → weighted log-prob + KL. |
 | `training/log_probs.py` | `encode_prompt_and_completion`, `completion_log_probs`. |
-| `scripts/` | `collect_rollouts.py`, `train.py`, `play_game.py`. |
+| `scripts/` | `collect_rollouts.py`, `train.py`, `play_game.py`, `evaluate.py`. |
 | `wordlist-eng.txt` | Default word pool for boards. |
 
 ## Terminology
@@ -94,7 +105,7 @@ Use `python scripts/train.py --help` and `sft` / `grpo` subcommands for full fla
 ## Extending
 
 - Implement `TextGenerationBackend` in `llm/backends.py` for non–Hugging Face providers; pass it into `LLMSpymasterPolicy` / `LLMGuesserPolicy`.
-- **Batching**, **parallel envs**, **eval harnesses**, and **Codenames rule checks** on clues are left to the user (scaffold-focused).
+- **Batching** and **parallel envs** are left to the user (scaffold-focused).
 
 ## License
 

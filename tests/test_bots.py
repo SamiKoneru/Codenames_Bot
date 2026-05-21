@@ -15,7 +15,6 @@ from bots.spymaster.policy import (
     ClueAction, LLMSpymasterPolicy, RandomSpymasterPolicy, SpymasterObservation,
 )
 from bots.spymaster.prompts import build_spymaster_prompt, _relative_label_name
-from bots.spymaster.schemas import SpymasterConfig
 from bots.guesser.policy import (
     GuessAction, LLMGuesserPolicy, RandomGuesserPolicy, GuesserObservation,
 )
@@ -119,16 +118,26 @@ class TestSpymasterPrompt(unittest.TestCase):
     def test_contains_team_info(self):
         self.assertIn("TEAM_A", self.prompt)
 
-    def test_config_weights_shown(self):
-        cfg = SpymasterConfig(w_assassin=9.9)
-        prompt = build_spymaster_prompt(self.obs, cfg)
-        self.assertIn("9.9", prompt)
+    def test_clue_rules_and_strategy_shown(self):
+        self.assertIn("Clue rules", self.prompt)
+        self.assertIn("Strategy", self.prompt)
 
     def test_revealed_cards_marked(self):
         obs = make_spymaster_obs(revealed=[True, False, False, False, False])
         prompt = build_spymaster_prompt(obs)
         self.assertIn("revealed", prompt)
         self.assertIn("hidden", prompt)
+
+    def test_no_past_clues_shows_none(self):
+        self.assertIn("Previously used clues: none", self.prompt)
+
+    def test_past_clues_rendered(self):
+        obs = make_spymaster_obs()
+        obs.past_clues = ["ocean", "metal"]
+        prompt = build_spymaster_prompt(obs)
+        self.assertIn("ocean", prompt)
+        self.assertIn("metal", prompt)
+        self.assertIn("do not reuse", prompt)
 
 
 class TestGuesserPrompt(unittest.TestCase):
@@ -295,6 +304,77 @@ class TestLLMSpymasterPolicy(unittest.TestCase):
         policy = self._policy(['{"guess_limit": 2}'])
         with self.assertRaises(ValueError):
             policy.choose_clue(make_spymaster_obs())
+
+    def test_legal_clue_marked_valid(self):
+        # "ocean" is unrelated to the default board words.
+        policy = self._policy(['{"clue_word": "ocean", "guess_limit": 1}'])
+        action = policy.choose_clue(make_spymaster_obs())
+        self.assertTrue(action.metadata["validation"]["is_legal"])
+        self.assertNotIn("illegal_clue", action.metadata)
+
+    def test_board_word_clue_flagged_illegal(self):
+        # "river" is on the default board -> substring rule violation.
+        policy = self._policy(['{"clue_word": "river", "guess_limit": 1}'])
+        action = policy.choose_clue(make_spymaster_obs())
+        self.assertTrue(action.metadata["illegal_clue"])
+        self.assertEqual(action.metadata["validation"]["reason"], "substring")
+
+    def test_repeat_clue_flagged_illegal(self):
+        obs = make_spymaster_obs()
+        obs.past_clues = ["ocean"]
+        policy = self._policy(['{"clue_word": "ocean", "guess_limit": 1}'])
+        action = policy.choose_clue(obs)
+        self.assertTrue(action.metadata["illegal_clue"])
+        self.assertEqual(action.metadata["validation"]["reason"], "repeat")
+
+    def test_validation_can_be_disabled(self):
+        policy = LLMSpymasterPolicy(
+            StaticTextBackend(['{"clue_word": "river", "guess_limit": 1}']),
+            validate_clues=False,
+        )
+        action = policy.choose_clue(make_spymaster_obs())
+        self.assertEqual(action.clue_word, "river")
+        self.assertNotIn("validation", action.metadata)
+        self.assertNotIn("illegal_clue", action.metadata)
+
+    def test_retry_recovers_from_illegal_clue(self):
+        # First response is a board word (illegal), second is legal.
+        policy = LLMSpymasterPolicy(
+            StaticTextBackend([
+                '{"clue_word": "river", "guess_limit": 1}',
+                '{"clue_word": "ocean", "guess_limit": 1}',
+            ]),
+            max_retries=1,
+        )
+        action = policy.choose_clue(make_spymaster_obs())
+        self.assertEqual(action.clue_word, "ocean")
+        self.assertTrue(action.metadata["validation"]["is_legal"])
+        self.assertEqual(action.metadata["attempts"], 2)
+        self.assertNotIn("illegal_clue", action.metadata)
+
+    def test_retry_exhausted_flags_illegal(self):
+        # Both responses illegal -> illegal_clue flag survives.
+        policy = LLMSpymasterPolicy(
+            StaticTextBackend([
+                '{"clue_word": "river", "guess_limit": 1}',
+                '{"clue_word": "stone", "guess_limit": 1}',
+            ]),
+            max_retries=1,
+        )
+        action = policy.choose_clue(make_spymaster_obs())
+        self.assertTrue(action.metadata["illegal_clue"])
+        self.assertEqual(action.metadata["attempts"], 2)
+
+    def test_retry_feedback_appears_in_prompt(self):
+        # The second prompt should carry the substring rejection note.
+        backend = StaticTextBackend([
+            '{"clue_word": "river", "guess_limit": 1}',
+            '{"clue_word": "ocean", "guess_limit": 1}',
+        ])
+        policy = LLMSpymasterPolicy(backend, max_retries=1)
+        action = policy.choose_clue(make_spymaster_obs())
+        self.assertIn("rejected", action.prompt.lower())
+        self.assertIn("river", action.prompt)
 
 
 # ---------------------------------------------------------------------------

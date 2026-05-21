@@ -6,15 +6,15 @@ from bots.spymaster.policy import (
     SpymasterPolicy,
 )
 from bots.spymaster.prompts import build_spymaster_prompt
-from bots.spymaster.schemas import ClueChoice, SpymasterConfig
+from bots.spymaster.validation import ClueValidationResult, validate_clue
 
 __all__ = [
     "ClueAction",
-    "ClueChoice",
+    "ClueValidationResult",
     "LLMSpymasterPolicy",
     "RandomSpymasterPolicy",
-    "SpymasterConfig",
     "SpymasterObservation",
     "SpymasterPolicy",
     "build_spymaster_prompt",
+    "validate_clue",
 ]
